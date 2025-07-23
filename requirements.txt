@@ -1,3 +1,4 @@
+python-dotenv
 fastapi
 uvicorn
 python-docx
@@ -5,3 +6,5 @@ pdfplumber
 pytesseract
 pdf2image
 python-multipart
+
+cryptography

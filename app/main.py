@@ -1,15 +1,41 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 import os
+from dotenv import load_dotenv
 import tempfile
 from typing import Optional
+
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import padding
+import base64
 
 from pdf2image import convert_from_path
 import pytesseract
 import docx
 import pdfplumber
 
+
+load_dotenv()
 app = FastAPI()
+
+# AES-256 key (should be 32 bytes). In production, load from env or secure vault.
+AES_KEY = os.environ.get("ACIO_AES_KEY", "0123456789abcdef0123456789abcdef").encode()
+AES_IV = b"acioinitvector123"  # 16 bytes for AES CBC
+
+def encrypt_bytes(data: bytes) -> bytes:
+    padder = padding.PKCS7(128).padder()
+    padded_data = padder.update(data) + padder.finalize()
+    cipher = Cipher(algorithms.AES(AES_KEY), modes.CBC(AES_IV), backend=default_backend())
+    encryptor = cipher.encryptor()
+    return encryptor.update(padded_data) + encryptor.finalize()
+
+def decrypt_bytes(data: bytes) -> bytes:
+    cipher = Cipher(algorithms.AES(AES_KEY), modes.CBC(AES_IV), backend=default_backend())
+    decryptor = cipher.decryptor()
+    padded_data = decryptor.update(data) + decryptor.finalize()
+    unpadder = padding.PKCS7(128).unpadder()
+    return unpadder.update(padded_data) + unpadder.finalize()
 
 
 def extract_text_from_docx(file_path: str) -> str:
@@ -57,14 +83,27 @@ def extract_text(file_path: str, filename: str) -> str:
         raise ValueError("Unsupported file type")
 
 
+
 @app.post("/extract-text/")
 async def upload_file(file: UploadFile = File(...)):
     try:
+        # Read file bytes
+        file_bytes = await file.read()
+        # Encrypt and save to disk
         with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp.write(await file.read())
+            encrypted = encrypt_bytes(file_bytes)
+            tmp.write(encrypted)
             tmp_path = tmp.name
-        text = extract_text(tmp_path, file.filename)
+        # Decrypt in memory for processing
+        with open(tmp_path, "rb") as f:
+            decrypted_bytes = decrypt_bytes(f.read())
+        # Save decrypted to another temp file for extraction
+        with tempfile.NamedTemporaryFile(delete=False) as dec_tmp:
+            dec_tmp.write(decrypted_bytes)
+            dec_tmp_path = dec_tmp.name
+        text = extract_text(dec_tmp_path, file.filename)
         os.unlink(tmp_path)
+        os.unlink(dec_tmp_path)
         return JSONResponse(content={"text": text})
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
