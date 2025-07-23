@@ -1,5 +1,6 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 import os
 from dotenv import load_dotenv
 import tempfile
@@ -19,9 +20,17 @@ import pdfplumber
 load_dotenv()
 app = FastAPI()
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],  # React dev server
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # AES-256 key (should be 32 bytes). In production, load from env or secure vault.
-AES_KEY = os.environ.get("ACIO_AES_KEY", "0123456789abcdef0123456789abcdef").encode()
-AES_IV = b"acioinitvector123"  # 16 bytes for AES CBC
+AES_KEY = os.environ.get("ACIO_AES_KEY", "0123456789abcdef0123456789abcdef").encode()[:32]
+AES_IV = b"acioinitvector12"  # 16 bytes for AES CBC
 
 def encrypt_bytes(data: bytes) -> bytes:
     padder = padding.PKCS7(128).padder()
