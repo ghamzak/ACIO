@@ -8,15 +8,42 @@ function App() {
   const [result, setResult] = useState('');
   const [error, setError] = useState('');
 
+
+  const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+  const ALLOWED_TYPES = [
+    'application/pdf',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
+    'image/jpeg',
+    'image/png',
+  ];
+
   const handleFileChange = (e) => {
-    setFile(e.target.files[0]);
+    const selected = e.target.files[0];
     setResult('');
     setError('');
+    if (!selected) {
+      setFile(null);
+      return;
+    }
+    if (!ALLOWED_TYPES.includes(selected.type)) {
+      setError('Unsupported file type. Please upload PDF, DOCX, JPG, or PNG.');
+      setFile(null);
+      return;
+    }
+    if (selected.size > MAX_FILE_SIZE) {
+      setError('File is too large. Maximum allowed size is 10MB.');
+      setFile(null);
+      return;
+    }
+    setFile(selected);
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!file) return;
+    if (!file) {
+      setError('Please select a file to upload.');
+      return;
+    }
     setLoading(true);
     setResult('');
     setError('');
@@ -27,7 +54,10 @@ function App() {
         method: 'POST',
         body: formData,
       });
-      if (!response.ok) throw new Error('Extraction failed');
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Extraction failed');
+      }
       const data = await response.json();
       setResult(data.text);
     } catch (err) {

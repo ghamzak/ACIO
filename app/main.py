@@ -110,7 +110,7 @@ async def upload_file(file: UploadFile = File(...)):
         with tempfile.NamedTemporaryFile(delete=False) as dec_tmp:
             dec_tmp.write(decrypted_bytes)
             dec_tmp_path = dec_tmp.name
-        text = extract_text(dec_tmp_path, file.filename)
+        text = extract_text(dec_tmp_path, file.filename) # type: ignore
         os.unlink(tmp_path)
         os.unlink(dec_tmp_path)
         return JSONResponse(content={"text": text})
