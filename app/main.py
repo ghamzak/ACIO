@@ -1,20 +1,35 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Query
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import ValidationError
 import os
 from dotenv import load_dotenv
 import tempfile
 from typing import Optional
+import base64
+import re
+def clean_llm_json_response(text: str) -> str:
+    """Remove code fences and extra whitespace from LLM output."""
+    # Remove triple backticks and optional 'json' after them
+    text = re.sub(r'^```(?:json)?', '', text.strip(), flags=re.IGNORECASE)
+    text = re.sub(r'```$', '', text.strip())
+    # Remove any leading/trailing whitespace again
+    return text.strip()
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import padding
-import base64
+
 
 from pdf2image import convert_from_path
 import pytesseract
 import docx
 import pdfplumber
+from app.llm_provider import get_llm
+from app.prompt_utils import build_contract_classification_prompt
+from app.models import ContractTypePrediction
+from app.contract_types import CONTRACT_TYPES
+
 
 
 load_dotenv()
@@ -92,6 +107,10 @@ def extract_text(file_path: str, filename: str) -> str:
         raise ValueError("Unsupported file type")
 
 
+def get_valid_contract_types():
+    return {ct["name"] for ct in CONTRACT_TYPES}
+
+
 
 @app.post("/extract-text/")
 async def upload_file(file: UploadFile = File(...)):
@@ -116,3 +135,81 @@ async def upload_file(file: UploadFile = File(...)):
         return JSONResponse(content={"text": text})
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# --- Contract Type Classification Endpoint ---
+@app.post("/classify-contract/")
+async def classify_contract(
+    file: UploadFile = File(...),
+    provider: str = Query("openai", description="LLM provider: 'openai' or 'groq'")
+):
+    try:
+        # Extract text from file (reuse FR-01 logic)
+        file_bytes = await file.read()
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            encrypted = encrypt_bytes(file_bytes)
+            tmp.write(encrypted)
+            tmp_path = tmp.name
+        with open(tmp_path, "rb") as f:
+            decrypted_bytes = decrypt_bytes(f.read())
+        with tempfile.NamedTemporaryFile(delete=False) as dec_tmp:
+            dec_tmp.write(decrypted_bytes)
+            dec_tmp_path = dec_tmp.name
+        contract_text = extract_text(dec_tmp_path, file.filename) # type: ignore
+        os.unlink(tmp_path)
+        os.unlink(dec_tmp_path)
+
+        # Build prompt
+        prompt = build_contract_classification_prompt(contract_text)
+
+        # Call LLM
+        llm = get_llm(provider)
+        response = llm.invoke(prompt)
+        print(type(response), type(response.content))
+        # If using LangChain, response may be a BaseMessage or string
+        if hasattr(response, 'content'):
+            response_content = response.content
+        else:
+            response_content = response        
+
+        # Parse and validate structured output
+        if not isinstance(response_content, (str, bytes, bytearray)):
+            # Try to convert to string, else error
+            try:
+                # print(response_content)
+                response_content = str(response_content)
+            except Exception:
+                # print("Line 173")
+                raise HTTPException(status_code=422, detail="LLM response is not a valid string.")
+        try:
+            # print(response_content)
+            cleaned = clean_llm_json_response(response_content)
+            # If cleaned is a plain string (not JSON), wrap it
+            import json
+            try:
+                # Try to parse as JSON
+                parsed = json.loads(cleaned)
+                if isinstance(parsed, dict):
+                    result = ContractTypePrediction.model_validate_json(cleaned)
+                elif isinstance(parsed, str):
+                    # LLM returned just the contract type string
+                    result = ContractTypePrediction.model_validate_json(json.dumps({"contract_type": parsed}))
+                else:
+                    raise ValueError("Unexpected LLM output format.")
+            except json.JSONDecodeError:
+                # Not JSON, treat as plain string
+                result = ContractTypePrediction.model_validate_json(json.dumps({"contract_type": cleaned}))
+        except ValidationError:
+            # print("Line 179")
+            raise HTTPException(status_code=422, detail="LLM did not return valid structured output.")
+
+        valid_types = get_valid_contract_types()
+        if result.contract_type not in valid_types:
+            result.contract_type = "Unknown"
+
+        return result.model_dump()
+    except Exception as e:
+        # print("Line 188")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
