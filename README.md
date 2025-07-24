@@ -48,6 +48,7 @@ cd ACIO
 ## API Testing
 - You can test the API directly using Swagger UI at [http://localhost:8000/docs](http://localhost:8000/docs)
 - Use the `/extract-text/` endpoint to upload and extract text from contracts.
+- Use the `/classify-contract/` endpoint to upload a contract file and get the contract type.
 
 ## CORS
 - CORS (Cross-Origin Resource Sharing) is enabled in the backend to allow the React frontend (running on a different port) to communicate with the FastAPI backend during development. This is necessary for browser security and local development.

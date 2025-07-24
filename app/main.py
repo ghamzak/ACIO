@@ -165,7 +165,7 @@ async def classify_contract(
         # Call LLM
         llm = get_llm(provider)
         response = llm.invoke(prompt)
-        print(type(response), type(response.content))
+        # print(type(response), type(response.content))
         # If using LangChain, response may be a BaseMessage or string
         if hasattr(response, 'content'):
             response_content = response.content
